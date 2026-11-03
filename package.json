@@ -1,0 +1,25 @@
+{
+  "name": "givre",
+  "productName": "Givre",
+  "version": "1.0.0",
+  "description": "Aide-mémoire en verre, toujours au premier plan.",
+  "main": "src/main.js",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "commonjs",
+  "scripts": {
+    "start": "electron .",
+    "icon": "electron scripts/make-icon.js",
+    "pack": "node scripts/pack.mjs"
+  },
+  "devDependencies": {
+    "@electron/packager": "^20.3.0",
+    "electron": "^45.2.1"
+  },
+  "dependencies": {
+    "koffi": "^3.3.6"
+  },
+  "allowScripts": {
+    "koffi@3.3.6": true
+  }
+}
