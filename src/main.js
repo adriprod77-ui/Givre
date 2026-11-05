@@ -25,6 +25,9 @@ const ATTACH_ZONE = 92;
 app.setPath('userData', process.env.GIVRE_DATA_DIR || path.join(app.getPath('appData'), 'Givre'));
 app.setAppUserModelId('fr.givre.app');
 images.registerScheme();
+// Notes keep painting even when Windows reports them as covered (a fullscreen game, the
+// lock screen…): Chromium would otherwise stop drawing them, and could bring them back empty.
+app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
 
 let win = null; // the main window, with every tab that is not detached
 const notes = new Map(); // tab id → detached note window
@@ -182,9 +185,10 @@ function buildWindow(bounds, { query, minHeight = MIN_HEIGHT } = {}) {
       contextIsolation: true,
       sandbox: true,
       spellcheck: false,
+      backgroundThrottling: false,
     },
   });
-  w.givre = { hovering: false, opacity: 1, fade: null, leave: null, preview: null, previewTimer: null, over: false, closing: false };
+  w.givre = { hovering: false, opacity: 1, fade: null, leave: null, preview: null, previewTimer: null, over: false, closing: false, hang: null };
   w.removeMenu();
   w.loadFile(path.join(__dirname, 'renderer', 'index.html'), query ? { query } : undefined);
 
@@ -203,6 +207,25 @@ function buildWindow(bounds, { query, minHeight = MIN_HEIGHT } = {}) {
     return { action: 'deny' };
   });
   w.webContents.on('will-navigate', (e) => e.preventDefault());
+  // A note whose page died shows an empty pane forever: replace it (notes are already saved).
+  w.webContents.on('render-process-gone', (_e, details) => {
+    if (details.reason !== 'clean-exit') setImmediate(() => rebuildWindow(w));
+  });
+  // "Afficher le bureau" (Win + D) would minimise a note that has no taskbar button, with
+  // no obvious way back: an always-on-top note simply comes straight back.
+  w.on('minimize', () => {
+    if (!store.data.settings.alwaysOnTop || quitting) return;
+    setTimeout(() => {
+      if (w.isDestroyed()) return;
+      w.restore();
+      glass.keepActive(w);
+    }, 60);
+  });
+  w.webContents.on('unresponsive', () => {
+    clearTimeout(w.givre.hang);
+    w.givre.hang = setTimeout(() => !w.isDestroyed() && w.webContents.forcefullyCrashRenderer(), 8000);
+  });
+  w.webContents.on('responsive', () => clearTimeout(w.givre.hang));
   w.webContents.on('context-menu', (_e, params) => {
     if (!params.isEditable) return;
     const f = params.editFlags;
@@ -226,12 +249,13 @@ function whenReady(w, show) {
     if (store.data.settings.ghost) w.setIgnoreMouseEvents(true);
     applyOpacity(w, false);
     show(w);
+    if (store.data.settings.alwaysOnTop) glass.ensureTopmost(w);
     glass.keepActive(w);
   });
 }
 
-function createWindow() {
-  win = buildWindow(initialBounds(), { minHeight: store.data.compact ? COMPACT_HEIGHT : MIN_HEIGHT });
+function createWindow(bounds = initialBounds()) {
+  win = buildWindow(bounds, { minHeight: store.data.compact ? COMPACT_HEIGHT : MIN_HEIGHT });
   if (store.data.compact) win.setMaximumSize(10000, COMPACT_HEIGHT);
   whenReady(win, (w) => (process.argv.includes('--autostart') ? w.showInactive() : w.show()));
   win.on('moved', rememberBounds);
@@ -248,6 +272,32 @@ function createWindow() {
   });
 }
 
+// A note whose display died (page crash, GPU reset) is replaced by a brand-new window at the
+// same place — what relaunching Givre used to fix. Reloading the page alone could leave it blank.
+let rebuilds = [];
+
+function rebuildWindow(w) {
+  if (quitting || !w || w.isDestroyed()) return;
+  const now = Date.now();
+  rebuilds = rebuilds.filter((t) => now - t < 60_000);
+  if (rebuilds.length >= 6) return; // failing in a loop: stop rather than spin
+  rebuilds.push(now);
+  const bounds = w.getBounds();
+  const noteId = [...notes].find(([, nw]) => nw === w)?.[0];
+  // The replacement is created first: with no window left, Electron would quit.
+  if (noteId) createNoteWindow(noteId, bounds);
+  else if (w === win) {
+    mainReady = false;
+    createWindow(bounds);
+  } else return;
+  w.givre.closing = true;
+  w.destroy();
+}
+
+function rebuildAll() {
+  for (const w of allWindows()) rebuildWindow(w);
+}
+
 function rememberBounds() {
   if (!win || heightAnim) return;
   const b = win.getBounds();
@@ -258,7 +308,11 @@ function rememberBounds() {
 function reveal() {
   if (!win) return;
   allHidden = false;
-  for (const w of notes.values()) if (!w.isDestroyed() && !w.isVisible()) w.showInactive();
+  for (const w of notes.values()) {
+    if (w.isDestroyed()) continue;
+    if (w.isMinimized()) w.restore();
+    if (!w.isVisible()) w.showInactive();
+  }
   if (win.isMinimized()) win.restore();
   win.show();
   win.focus();
@@ -437,11 +491,15 @@ function toggleGhost() {
 
 // The cursor is polled rather than taken from DOM events: drag regions
 // (title bar) are non-client areas and would read as "mouse left".
+// Every second the same loop also checks that notes are still really on top.
 function watchHover() {
+  let tick = 0;
   hoverTimer = setInterval(() => {
     const p = screen.getCursorScreenPoint();
+    const checkTop = store.data.settings.alwaysOnTop && ++tick % 8 === 0;
     for (const w of allWindows()) {
       if (!w.isVisible()) continue;
+      if (checkTop) glass.ensureTopmost(w);
       const b = w.getBounds();
       const g = w.givre;
       const inside = p.x >= b.x && p.x < b.x + b.width && p.y >= b.y && p.y < b.y + b.height;
@@ -535,6 +593,7 @@ function refreshTrayMenu() {
     { label: 'Mode discret', type: 'checkbox', checked: s.discreet, click: toggle('discreet') },
     { label: 'Lancer au démarrage', type: 'checkbox', checked: s.launchAtLogin, click: toggle('launchAtLogin') },
     { type: 'separator' },
+    { label: 'Réparer l’affichage', click: () => { rebuildAll(); reveal(); } },
     { label: 'Quitter Givre', click: quit },
   ]));
 }
@@ -724,6 +783,11 @@ ipcMain.handle('app:install', (e) => {
   return { ok: true };
 });
 ipcMain.on('app:uninstall', (e) => isMain(e) && runUninstall(false));
+
+// The GPU process restarts on its own, but glass windows can come back blank: rebuild them.
+app.on('child-process-gone', (_e, details) => {
+  if (details.type === 'GPU' && !quitting) setTimeout(rebuildAll, 800);
+});
 
 app.on('before-quit', () => {
   quitting = true;

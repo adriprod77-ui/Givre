@@ -1,7 +1,7 @@
 {
   "name": "givre",
   "productName": "Givre",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Aide-mémoire en verre, toujours au premier plan.",
   "main": "src/main.js",
   "private": true,
