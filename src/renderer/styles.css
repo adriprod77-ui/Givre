@@ -239,8 +239,10 @@ body.ready .app { opacity: 1; }
 .pin-btn.on .pin-label { max-width: 64px; margin-left: 4px; opacity: 1; }
 
 .ghost-btn.on { color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent); }
-.ghost-btn.on svg { animation: float 2.6s ease-in-out infinite; }
-@keyframes float { 50% { transform: translateY(-1.5px); } }
+/* One bounce when ghost mode turns on, never a loop: an endless animation kept the
+   whole glass window repainting (~25 % of a CPU core) the entire time a game was running. */
+.ghost-btn.on svg { animation: ghost-in .6s var(--spring); }
+@keyframes ghost-in { 40% { transform: translateY(-2.5px) scale(1.12); } }
 
 @media (max-width: 330px) {
   .pin-btn.on .pin-label { display: none; }

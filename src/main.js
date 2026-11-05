@@ -496,7 +496,7 @@ function watchHover() {
   let tick = 0;
   hoverTimer = setInterval(() => {
     const p = screen.getCursorScreenPoint();
-    const checkTop = store.data.settings.alwaysOnTop && ++tick % 8 === 0;
+    const checkTop = store.data.settings.alwaysOnTop && ++tick % 5 === 0;
     for (const w of allWindows()) {
       if (!w.isVisible()) continue;
       if (checkTop) glass.ensureTopmost(w);
@@ -510,7 +510,7 @@ function watchHover() {
       if (inside) applyOpacity(w);
       else g.leave = setTimeout(() => applyOpacity(w), store.data.settings.ghost ? 150 : 900);
     }
-  }, 120);
+  }, 200);
 }
 
 // ─── Settings ──────────────────────────────────────────────────────────────
